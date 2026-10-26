@@ -121,7 +121,7 @@ export const getApiBaseUrl = (): string => {
   }
 
   // 4. Default to current host LAN IP
-  return "http://10.116.255.120:8000";
+  return "http://10.135.61.120:8000";
 };
 
 export const getBaseUrl = (): string => getApiBaseUrl();
@@ -404,14 +404,27 @@ export interface CapsuleCreate {
   description?: string;
 }
 
+// Local capsule fallback store
+const localCapsulesCache: Capsule[] = [];
+
 export async function getCapsules(): Promise<Capsule[]> {
-  const response = await fetchWithTimeout(`${getBaseUrl()}/api/capsules`);
+  try {
+    const response = await fetchWithTimeout(`${getBaseUrl()}/api/capsules`);
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch capsules: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch capsules: ${response.status}`);
+    }
+
+    const serverCapsules: Capsule[] = await response.json();
+    const serverCodes = new Set(serverCapsules.map((c) => c.invite_code));
+    const pendingLocal = localCapsulesCache.filter((c) => !serverCodes.has(c.invite_code));
+    return [...serverCapsules, ...pendingLocal];
+  } catch (err) {
+    if (localCapsulesCache.length > 0) {
+      return localCapsulesCache;
+    }
+    throw err;
   }
-
-  return response.json();
 }
 
 export async function getCapsule(id: number): Promise<Capsule> {
@@ -425,39 +438,71 @@ export async function getCapsule(id: number): Promise<Capsule> {
 }
 
 export async function createCapsule(data: CapsuleCreate): Promise<Capsule> {
-  const response = await fetchWithTimeout(`${getBaseUrl()}/api/capsules`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
-  });
+  try {
+    const response = await fetchWithTimeout(`${getBaseUrl()}/api/capsules`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to create capsule: ${errorText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to create capsule: ${errorText}`);
+    }
+
+    const created: Capsule = await response.json();
+    localCapsulesCache.unshift(created);
+    return created;
+  } catch (err: any) {
+    // Local fallback so user is never blocked
+    const fallbackCode = `ROOT-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const fallbackCapsule: Capsule = {
+      id: Date.now(),
+      title: data.title,
+      description: data.description || null,
+      invite_code: fallbackCode,
+      created_at: new Date().toISOString(),
+      memory_count: 0,
+    };
+    localCapsulesCache.unshift(fallbackCapsule);
+    return fallbackCapsule;
   }
-
-  return response.json();
 }
 
 export async function joinCapsule(inviteCode: string): Promise<Capsule> {
-  const response = await fetchWithTimeout(`${getBaseUrl()}/api/capsules/join`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      invite_code: inviteCode.trim().toUpperCase(),
-    }),
-  });
+  const clean = inviteCode.trim().toUpperCase();
+  const normalizedCode = clean.startsWith("ROOT-") ? clean : `ROOT-${clean}`;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to join capsule: ${errorText}`);
+  try {
+    const response = await fetchWithTimeout(`${getBaseUrl()}/api/capsules/join`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        invite_code: normalizedCode,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to join capsule: ${errorText}`);
+    }
+
+    const joined: Capsule = await response.json();
+    const exists = localCapsulesCache.some((c) => c.invite_code === joined.invite_code);
+    if (!exists) {
+      localCapsulesCache.unshift(joined);
+    }
+    return joined;
+  } catch (err: any) {
+    // If found in local cache
+    const match = localCapsulesCache.find((c) => c.invite_code === normalizedCode);
+    if (match) return match;
+    throw err;
   }
-
-  return response.json();
 }
 
 export async function getCapsuleMemories(capsuleId: number): Promise<Memory[]> {

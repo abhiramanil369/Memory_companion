@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 
 import { COLORS } from "../constants/colors";
@@ -22,6 +24,7 @@ import {
   createCapsule,
   joinCapsule,
   getCapsuleMemories,
+  createMemory,
   Capsule,
   Memory,
 } from "../services/api";
@@ -37,6 +40,12 @@ export default function CapsulesScreen() {
   const [selectedCapsule, setSelectedCapsule] = useState<Capsule | null>(null);
   const [capsuleMemories, setCapsuleMemories] = useState<Memory[]>([]);
   const [loadingMemories, setLoadingMemories] = useState(false);
+
+  // Add memory to capsule state
+  const [isAddMemoryVisible, setIsAddMemoryVisible] = useState(false);
+  const [memoryTitle, setMemoryTitle] = useState("");
+  const [memoryContent, setMemoryContent] = useState("");
+  const [isAddingMemory, setIsAddingMemory] = useState(false);
 
   // Create form state
   const [newTitle, setNewTitle] = useState("");
@@ -96,7 +105,7 @@ export default function CapsulesScreen() {
       setNewTitle("");
       setNewDescription("");
       setIsCreateVisible(false);
-      setCapsulesList((prev) => [created, ...prev]);
+      setCapsulesList((prev) => [created, ...prev.filter((c) => c.id !== created.id)]);
       Alert.alert(
         "Capsule Created ✦",
         `Share invite code: ${created.invite_code} with your friends or roommates!`
@@ -109,18 +118,25 @@ export default function CapsulesScreen() {
   };
 
   const handleJoinCapsule = async () => {
-    if (!joinCode.trim()) {
+    const rawCode = joinCode.trim();
+    if (!rawCode) {
       Alert.alert("Missing Code", "Please enter a capsule invite code.");
       return;
     }
 
     setIsJoining(true);
     try {
-      const joined = await joinCapsule(joinCode.trim());
+      const joined = await joinCapsule(rawCode);
       setJoinCode("");
       setIsJoinVisible(false);
-      await fetchCapsules();
-      Alert.alert("Welcome!", `You joined ${joined.title} successfully.`);
+      setCapsulesList((prev) => {
+        const exists = prev.some(
+          (c) => c.id === joined.id || c.invite_code === joined.invite_code
+        );
+        if (exists) return prev;
+        return [joined, ...prev];
+      });
+      Alert.alert("Welcome! ✦", `You joined "${joined.title}" successfully.`);
     } catch (error: any) {
       Alert.alert("Could Not Join", error?.message || "Invalid invite code.");
     } finally {
@@ -138,6 +154,44 @@ export default function CapsulesScreen() {
       setCapsuleMemories([]);
     } finally {
       setLoadingMemories(false);
+    }
+  };
+
+  const handleAddMemoryToCapsule = async () => {
+    if (!selectedCapsule) return;
+    if (!memoryTitle.trim() || !memoryContent.trim()) {
+      Alert.alert("Incomplete Memory", "Please provide a title and memory description.");
+      return;
+    }
+
+    setIsAddingMemory(true);
+    try {
+      const newMem = await createMemory({
+        title: memoryTitle.trim(),
+        content: memoryContent.trim(),
+        capsule_id: selectedCapsule.id,
+        memory_type: "capsule",
+      });
+
+      setCapsuleMemories((prev) => [newMem, ...prev]);
+      setCapsulesList((prev) =>
+        prev.map((c) =>
+          c.id === selectedCapsule.id
+            ? { ...c, memory_count: (c.memory_count || 0) + 1 }
+            : c
+        )
+      );
+      setSelectedCapsule((prev) =>
+        prev ? { ...prev, memory_count: (prev.memory_count || 0) + 1 } : null
+      );
+      setMemoryTitle("");
+      setMemoryContent("");
+      setIsAddMemoryVisible(false);
+      Alert.alert("Saved! ✦", "Your memory was added to this capsule.");
+    } catch (error: any) {
+      Alert.alert("Error", error?.message || "Failed to save memory.");
+    } finally {
+      setIsAddingMemory(false);
     }
   };
 
@@ -225,13 +279,13 @@ export default function CapsulesScreen() {
                 </View>
 
                 <Text style={styles.capsuleTitle}>{capsule.title}</Text>
-                {capsule.description && (
+                {capsule.description ? (
                   <Text style={styles.capsuleDesc}>{capsule.description}</Text>
-                )}
+                ) : null}
 
                 <View style={styles.capsuleFooter}>
                   <Text style={styles.metaCount}>
-                    {capsule.memory_count} memories shared
+                    {capsule.memory_count || 0} {(capsule.memory_count === 1) ? "memory" : "memories"} shared
                   </Text>
                   <Text style={styles.arrowText}>View →</Text>
                 </View>
@@ -245,6 +299,22 @@ export default function CapsulesScreen() {
             <Text style={styles.emptyDescription}>
               Create a capsule for your dorm, room, or friends to start sharing private moments together.
             </Text>
+            <View style={styles.emptyButtonRow}>
+              <Pressable
+                style={styles.emptyActionBtn}
+                onPress={() => setIsCreateVisible(true)}
+              >
+                <Text style={styles.emptyActionText}>+ Create Capsule</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.emptyActionBtn, styles.emptyActionBtnGlass]}
+                onPress={() => setIsJoinVisible(true)}
+              >
+                <Text style={[styles.emptyActionText, styles.emptyActionTextGlass]}>
+                  Join with Code
+                </Text>
+              </Pressable>
+            </View>
           </View>
         )}
       </ScrollView>
@@ -256,7 +326,10 @@ export default function CapsulesScreen() {
         transparent
         onRequestClose={() => setIsCreateVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalContent}>
             <Text style={styles.modalEyebrow}>NEW CAPSULE</Text>
             <Text style={styles.modalTitle}>Create a shared space</Text>
@@ -284,7 +357,11 @@ export default function CapsulesScreen() {
 
             <View style={styles.modalButtonRow}>
               <Pressable
-                onPress={() => setIsCreateVisible(false)}
+                onPress={() => {
+                  setNewTitle("");
+                  setNewDescription("");
+                  setIsCreateVisible(false);
+                }}
                 style={styles.cancelBtn}
                 disabled={isSubmitting}
               >
@@ -304,7 +381,7 @@ export default function CapsulesScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Join with Code Modal */}
@@ -314,7 +391,10 @@ export default function CapsulesScreen() {
         transparent
         onRequestClose={() => setIsJoinVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalContent}>
             <Text style={styles.modalEyebrow}>JOIN CAPSULE</Text>
             <Text style={styles.modalTitle}>Enter invite code</Text>
@@ -322,16 +402,20 @@ export default function CapsulesScreen() {
             <Text style={styles.inputLabel}>INVITE CODE</Text>
             <TextInput
               style={[styles.textInput, styles.codeInput]}
-              placeholder="e.g. ROOT-4X7B"
+              placeholder="ROOT-XXXX or 4 letters"
               placeholderTextColor={COLORS.muted}
               value={joinCode}
               onChangeText={setJoinCode}
               autoCapitalize="characters"
+              autoCorrect={false}
             />
 
             <View style={styles.modalButtonRow}>
               <Pressable
-                onPress={() => setIsJoinVisible(false)}
+                onPress={() => {
+                  setJoinCode("");
+                  setIsJoinVisible(false);
+                }}
                 style={styles.cancelBtn}
                 disabled={isJoining}
               >
@@ -351,7 +435,7 @@ export default function CapsulesScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Capsule Details Modal */}
@@ -362,11 +446,13 @@ export default function CapsulesScreen() {
         onRequestClose={() => setSelectedCapsule(null)}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { maxHeight: "85%" }]}>
+          <View style={[styles.modalContent, { maxHeight: "88%" }]}>
             <View style={styles.detailHeader}>
-              <View>
+              <View style={{ flex: 1, paddingRight: 10 }}>
                 <Text style={styles.modalEyebrow}>CAPSULE ARCHIVE</Text>
-                <Text style={styles.modalTitle}>{selectedCapsule?.title}</Text>
+                <Text style={styles.modalTitle} numberOfLines={1}>
+                  {selectedCapsule?.title}
+                </Text>
               </View>
               <Pressable
                 onPress={() => setSelectedCapsule(null)}
@@ -376,36 +462,127 @@ export default function CapsulesScreen() {
               </Pressable>
             </View>
 
-            <View style={styles.codeShareBox}>
-              <Text style={styles.codeShareLabel}>INVITE CODE</Text>
+            <Pressable
+              style={styles.codeShareBox}
+              onPress={() => {
+                Alert.alert(
+                  "Capsule Invite Code",
+                  `Share this code with friends:\n\n${selectedCapsule?.invite_code}`
+                );
+              }}
+            >
+              <Text style={styles.codeShareLabel}>INVITE CODE (TAP TO SHARE)</Text>
               <Text style={styles.codeShareValue}>
                 {selectedCapsule?.invite_code}
               </Text>
+            </Pressable>
+
+            <View style={styles.memoriesHeaderRow}>
+              <Text style={styles.sectionTitle}>MEMORIES IN THIS CAPSULE</Text>
+              <Pressable
+                style={styles.addMemBtn}
+                onPress={() => setIsAddMemoryVisible(true)}
+              >
+                <Text style={styles.addMemBtnText}>+ Add Memory</Text>
+              </Pressable>
             </View>
 
-            <Text style={[styles.sectionTitle, { marginTop: 16, marginBottom: 10 }]}>
-              MEMORIES IN THIS CAPSULE
-            </Text>
-
             {loadingMemories ? (
-              <ActivityIndicator size="small" color={COLORS.primary} />
+              <ActivityIndicator
+                size="small"
+                color={COLORS.primary}
+                style={{ marginVertical: 20 }}
+              />
             ) : capsuleMemories.length > 0 ? (
-              <ScrollView showsVerticalScrollIndicator={false}>
+              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 260 }}>
                 {capsuleMemories.map((mem) => (
                   <View key={mem.id} style={styles.memItem}>
                     <Text style={styles.memTitle}>{mem.title}</Text>
                     <Text style={styles.memContent}>{mem.content}</Text>
-                    <Text style={styles.memMood}>{mem.mood || "Moment"}</Text>
+                    <Text style={styles.memMood}>{mem.mood || "Shared Moment"}</Text>
                   </View>
                 ))}
               </ScrollView>
             ) : (
-              <Text style={styles.noMemText}>
-                No memories have been added to this capsule yet.
-              </Text>
+              <View style={styles.noMemContainer}>
+                <Text style={styles.noMemText}>
+                  No memories in this capsule yet.
+                </Text>
+                <Pressable
+                  style={styles.firstMemBtn}
+                  onPress={() => setIsAddMemoryVisible(true)}
+                >
+                  <Text style={styles.firstMemBtnText}>+ Add the first memory</Text>
+                </Pressable>
+              </View>
             )}
           </View>
         </View>
+      </Modal>
+
+      {/* Add Memory to Capsule Modal */}
+      <Modal
+        visible={isAddMemoryVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setIsAddMemoryVisible(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalEyebrow}>SHARED MEMORY</Text>
+            <Text style={styles.modalTitle}>Add to {selectedCapsule?.title}</Text>
+
+            <Text style={styles.inputLabel}>MEMORY TITLE</Text>
+            <TextInput
+              style={styles.textInput}
+              placeholder="e.g. Late night discussion, dorm meal"
+              placeholderTextColor={COLORS.muted}
+              value={memoryTitle}
+              onChangeText={setMemoryTitle}
+              maxLength={100}
+            />
+
+            <Text style={styles.inputLabel}>WHAT HAPPENED?</Text>
+            <TextInput
+              style={[styles.textInput, styles.textArea]}
+              placeholder="Write the shared memory story..."
+              placeholderTextColor={COLORS.muted}
+              value={memoryContent}
+              onChangeText={setMemoryContent}
+              multiline
+              numberOfLines={4}
+            />
+
+            <View style={styles.modalButtonRow}>
+              <Pressable
+                onPress={() => {
+                  setMemoryTitle("");
+                  setMemoryContent("");
+                  setIsAddMemoryVisible(false);
+                }}
+                style={styles.cancelBtn}
+                disabled={isAddingMemory}
+              >
+                <Text style={styles.cancelText}>Cancel</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={handleAddMemoryToCapsule}
+                style={[styles.submitBtn, isAddingMemory && styles.disabledBtn]}
+                disabled={isAddingMemory}
+              >
+                {isAddingMemory ? (
+                  <ActivityIndicator size="small" color={COLORS.background} />
+                ) : (
+                  <Text style={styles.submitText}>Save ✦</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <BottomDock />
@@ -569,7 +746,8 @@ const styles = StyleSheet.create({
   },
   emptyState: {
     alignItems: "center",
-    paddingTop: 50,
+    paddingTop: 40,
+    paddingBottom: 20,
   },
   emptyIcon: {
     color: COLORS.primary,
@@ -588,10 +766,34 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 21,
     maxWidth: 280,
+    marginBottom: 20,
+  },
+  emptyButtonRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  emptyActionBtn: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 18,
+  },
+  emptyActionBtnGlass: {
+    backgroundColor: COLORS.glass,
+    borderWidth: 1,
+    borderColor: COLORS.glassBorder,
+  },
+  emptyActionText: {
+    color: COLORS.background,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  emptyActionTextGlass: {
+    color: COLORS.primary,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.75)",
+    backgroundColor: "rgba(0, 0, 0, 0.78)",
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
@@ -706,7 +908,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(124, 255, 178, 0.20)",
     alignItems: "center",
-    marginBottom: 12,
+    marginBottom: 16,
   },
   codeShareLabel: {
     color: COLORS.muted,
@@ -717,9 +919,28 @@ const styles = StyleSheet.create({
   },
   codeShareValue: {
     color: COLORS.primary,
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "800",
     letterSpacing: 2,
+  },
+  memoriesHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  addMemBtn: {
+    backgroundColor: "rgba(124, 255, 178, 0.12)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(124, 255, 178, 0.25)",
+  },
+  addMemBtnText: {
+    color: COLORS.primary,
+    fontSize: 11,
+    fontWeight: "700",
   },
   memItem: {
     padding: 14,
@@ -746,10 +967,27 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "600",
   },
+  noMemContainer: {
+    alignItems: "center",
+    paddingVertical: 24,
+  },
   noMemText: {
     color: COLORS.muted,
     fontSize: 13,
     textAlign: "center",
-    marginVertical: 20,
+    marginBottom: 12,
+  },
+  firstMemBtn: {
+    backgroundColor: "rgba(124, 255, 178, 0.12)",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(124, 255, 178, 0.3)",
+  },
+  firstMemBtnText: {
+    color: COLORS.primary,
+    fontSize: 12,
+    fontWeight: "700",
   },
 });

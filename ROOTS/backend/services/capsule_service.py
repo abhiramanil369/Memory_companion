@@ -19,7 +19,7 @@ def generate_invite_code(db: Session) -> str:
             return code
 
 
-def create_capsule(db: Session, capsule_data: CapsuleCreate) -> Capsule:
+def create_capsule(db: Session, capsule_data: CapsuleCreate) -> dict:
     code = generate_invite_code(db)
     capsule = Capsule(
         title=capsule_data.title.strip(),
@@ -29,7 +29,14 @@ def create_capsule(db: Session, capsule_data: CapsuleCreate) -> Capsule:
     db.add(capsule)
     db.commit()
     db.refresh(capsule)
-    return capsule
+    return {
+        "id": capsule.id,
+        "title": capsule.title,
+        "description": capsule.description,
+        "invite_code": capsule.invite_code,
+        "created_at": capsule.created_at,
+        "memory_count": 0,
+    }
 
 
 def list_capsules(db: Session) -> list[dict]:
@@ -76,6 +83,10 @@ def get_capsule_by_code(db: Session, invite_code: str) -> dict | None:
     cap = db.scalar(
         select(Capsule).where(Capsule.invite_code == normalized)
     )
+    if not cap and not normalized.startswith("ROOT-"):
+        cap = db.scalar(
+            select(Capsule).where(Capsule.invite_code == f"ROOT-{normalized}")
+        )
     if not cap:
         return None
 

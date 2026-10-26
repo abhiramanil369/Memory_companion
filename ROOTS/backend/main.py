@@ -20,6 +20,17 @@ Base.metadata.create_all(
 )
 
 try:
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        res = conn.execute(text("PRAGMA table_info(memories)")).fetchall()
+        col_names = [row[1] for row in res]
+        if "capsule_id" not in col_names and "id" in col_names:
+            conn.execute(text("ALTER TABLE memories ADD COLUMN capsule_id INTEGER REFERENCES capsules(id)"))
+            conn.commit()
+except Exception as e:
+    print(f"Migration notice: {e}")
+
+try:
     from seed_games import seed_games
     seed_games()
 except Exception:
